@@ -1,5 +1,4 @@
 This script is designed to perform device enrollment on Intune in a semi-automatic way. 
-
 The script should be deployed via Device GPO and adds the current user to the administrators group. 
 
 It guides the user through pre-configured steps to perform enrollment on Intune autonomously, reducing the chances of error and avoiding the need for manual intervention on each workstation to add users to the administrators group.
