@@ -1,0 +1,2 @@
+# Intune
+Script For Intune
