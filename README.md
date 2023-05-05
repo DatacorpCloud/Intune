@@ -1,3 +1,9 @@
+Required:
+# Installa modulo Posh-SSH e Package NuGet
+Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+Install-Module -Name Posh-SSH -Scope AllUsers -Force
+# Fine Installazione Modulo Posh
+
 This script is designed to perform device enrollment on Intune in a semi-automatic way. 
 The script should be deployed via Device GPO and adds the current user to the administrators group. 
 
