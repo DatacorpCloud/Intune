@@ -1,0 +1,833 @@
+<#
+    .SYNOPSIS
+        UT Enroll Intune
+
+    .DESCRIPTION
+        Intune Enroll for Windows devices allows semi-automatic enrollment in Intune when an Azure P1 license is not available. 
+        This avoids the need for manual enrollment on each individual device and temporarily makes every user a local administrator to perform the enrollment.
+       
+
+    .AUTHOR
+        Alessio Orpellini
+
+    .VERSION
+        5.0.0
+
+    .NOTES
+        The script can be executed via GPO or distribution software.
+
+
+    .EXAMPLE
+        Powershell.exe -ExecutionPolicy Bypass -ExecutionPolicy RemoteSigned .\ut5.0
+#>
+
+while($true) {
+    $query = "SELECT * FROM Win32_ComputerSystem"
+    $computer = Get-WmiObject -Query $query
+    if ($computer.UserName) {
+        Write-Host "L'utente" $computer.UserName "è attualmente collegato."
+        
+# Corpo Script
+# Percorso del file da controllare
+$file_path = "c:\enroll\device.enroll"
+
+# Verifica se il file esiste
+if (Test-Path $file_path) {
+    Write-Host "Il Dispositivo è Registrato in Intune. Lo script si ferma qui."
+} else {
+
+if (!(Test-Path "C:\enroll")) {
+    New-Item -ItemType Directory -Path "C:\enroll"
+    }
+Start-Sleep -Seconds 30
+# Esegui qui le operazioni successive
+
+# Creazione file utADM.ps1 in c:/enroll che verrà usato dal Task Pianificato al LogON
+$utADM = {
+$cuser = (Get-WmiObject -Class Win32_ComputerSystem).UserName
+$group = "Administrators"
+$check = Get-LocalGroupMember -Group $group | Where-Object {$_.Name -eq $cuser}
+$hostname = $env:COMPUTERNAME
+
+$userFile = "C:\enroll\usercheck.txt"
+$userFileadd = "C:\enroll\user.txt"
+$hostfile = "C:\enroll\$hostname.txt"
+$userFileaddbk = "C:\windows\user.txt"
+
+# Test creazione cartella nome tenant
+
+# Definisci il percorso del registro di sistema da scansionare
+$regPath = "HKLM:\SYSTEM\ControlSet001\Control\CloudDomainJoin\TenantInfo"
+
+# Recupera tutte le sottocategorie del percorso del registro di sistema definito sopra
+$subKeys = Get-ChildItem -Path $regPath -Recurse
+
+# Loop attraverso ogni sottocategoria e crea una cartella in C:\enroll\TenantName se DisplayName esiste
+foreach ($key in $subKeys) {
+    
+# Verifica se la sottocategoria corrente esiste nel registro di sistema
+if (Test-Path $key.PSPath) {
+# Recupera il valore della chiave "DisplayName" dalla sottocategoria corrente
+$value = Get-ItemProperty $key.PSPath -Name "DisplayName" -ErrorAction SilentlyContinue
+        
+# Se il valore esiste, crea una cartella in C:\enroll\TenantName
+        if ($value -and $value.DisplayName) {
+            $path = "C:\enroll\" + $value.DisplayName
+            if (!(Test-Path $path)) {
+                New-Item -ItemType Directory -Path $path
+                Write-Output "Cartella creata: $($path)"
+            }
+        }
+    }
+}
+
+# Fine Test creazione Cartella Nome Tenant
+
+# Controlla se l'utente corrente è già membro del gruppo
+if ($check) {
+    Write-Host "L'utente $cuser è già un membro del gruppo $group."
+    $esito = "L'utente $cuser è già un membro del gruppo $group."
+    $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm"
+    $logEntry = "$timestamp $esito"
+    Add-Content -Path $hostfile -Value $logEntry
+    Add-Content -Path $userFile -Value $cuser
+} else {
+    # Aggiungi l'utente corrente al gruppo
+    $newToken = [System.Security.Principal.WindowsIdentity]::GetCurrent().Impersonate()
+    Add-LocalGroupMember -Group $group -Member $cuser
+    Write-Host "L'utente $cuser è stato aggiunto al gruppo $group."
+    $esito = "L'utente $cuser è stato aggiunto al gruppo $group."
+    $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm"
+    $logEntry = "$timestamp $esito"
+    Add-Content -Path $hostfile -Value $logEntry
+    Add-Content -Path $userFileadd -Value $cuser
+    Add-Content -Path $userFileaddbk -Value $cuser
+    $newToken.Undo()
+}
+
+klist -li 0x3e7 purge
+# Installa modulo Posh-SSH e Package NuGet
+Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+Install-Module -Name Posh-SSH -Scope AllUsers -Force
+# Fine Installazione Modulo Posh
+
+# Avvia Task FTP
+schtasks /run /tn "connector"
+#Fine Task FTP
+}
+
+$utADM | Out-File -FilePath "C:\enroll\utADM.ps1" -Encoding UTF8
+
+# Creazione file enroll.ps1 in c:/enroll che verrà usato dal Task Pianificato al LogON
+$enrollMDM = {
+     
+ # Inizio Modifica controllo
+
+
+# Leggi tutte le sottochiavi di "HKLM:\SOFTWARE\Microsoft\Enrollments" e le sottochiavi in profondità
+$regPath = "HKLM:\SOFTWARE\Microsoft\Enrollments"
+
+# Leggi tutte le sottochiavi di "HKLM:\SOFTWARE\Microsoft\Enrollments" e le sottochiavi in profondità
+$subKeys = Get-ChildItem -Path $regPath -Recurse
+
+# Inizializza una variabile per indicare se la chiave "DeviceEnroller" è presente o meno
+$deviceEnrollerPresent = $false
+
+# Loop attraverso tutte le sottochiavi e cerca la chiave "DeviceEnroller"
+foreach ($subKey in $subKeys) {
+    if (Test-Path "$($subKey.PSPath)\DeviceEnroller") {
+        $deviceEnrollerPresent = $true
+#        $deviceEnrollerValue = Get-ItemPropertyValue -Path "$($subKey.PSPath)\DeviceEnroller" -Name "(Default)"
+        Write-Host "La chiave 'DeviceEnroller' è presente in $($subKey.PSPath), il valore è $($deviceEnrollerValue)"
+    }
+}
+
+# Verifica se la chiave "DeviceEnroller" è presente e fai le operazioni appropriate
+if ($deviceEnrollerPresent) {
+    # La chiave "DeviceEnroller" è presente
+    Write-Host "Eseguo le operazioni per la chiave 'DeviceEnroller' presente"
+    $file = "c:\enroll\stato.txt"
+    if (Test-Path $file) {
+        # Incrementa il valore nel file esistente
+        $existingValue = Get-Content $file
+        $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm"
+        $newValue = "Il dispositivo è gestito da MDM: $timestamp"
+        Set-Content $file $newValue
+        Write-Host "Valore aggiornato nel file '$file': '$newValue'"
+    } else {
+        # Crea un nuovo file con il valore iniziale
+        $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm"
+        $value = "Il dispositivo è gestito da MDM: $timestamp"
+        New-Item -ItemType File -Path $file -Value $value
+        Write-Host "Creato nuovo file '$file' con il valore iniziale: '$value'"
+    }
+# Logga su HostFile
+     $hostname = $env:COMPUTERNAME
+     $hostFile = "C:\enroll\$hostname.txt"
+        $esito = "Il dispositivo non è gestito da MDM. Avvio del processo di enrollment"
+        $timestamp = Get-Date -Format "dd.MM.yyyy HH:mm"
+        $logEntry = "$timestamp $esito"
+     if (Test-Path $hostFile) {
+        Add-Content -Path $hostFile -Value $logEntry
+    } else {
+        New-Item -ItemType File -Path $hostFile -Value $logEntry
+}
+# Fine Log HostFile
+
+# Avvia Task FTP
+schtasks /run /tn "connector"
+#Fine Task FTP
+
+} else {
+    # La chiave "DeviceEnroller" non è presente
+
+# Outlook per l'utente corrente
+# Esegue il comando dsregcmd /status e lo salva in una variabile
+$output = dsregcmd /status
+
+# Utilizza Select-String per cercare il valore dell'account di esecuzione
+$account = $output | Select-String "Executing Account Name" | Select-String "@"
+
+# Estrae l'indirizzo email dall'output utilizzando le espressioni regolari
+$pattern = '\b\w+[\.\w]*@\w+(\.\w+)+\b'
+$emailAddress = [regex]::Match($account.Line, $pattern).Value
+
+
+# Stampa l'indirizzo email dell'account di esecuzione
+Write-Host "Indirizzo email dell'account di esecuzione: $emailAddress"
+
+
+# Implementa il contenuto di username con la variabile $emailAddress nel MDM Deep Link
+$mdmurl = "ms-device-enrollment:?mode=mdm&username=" + $emailAddress + "&servername=https://enrollment.manage.microsoft.com/enrollmentserver/discovery.svc"
+
+# Avvia il MDM Deep Link per l'utente corrente
+Start-Process $mdmurl 
+
+
+# Attendi qualche secondo
+Start-Sleep -Seconds 2
+
+# Invia il tasto Invio
+[System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+
+    Write-Host "Eseguo le operazioni per la chiave 'DeviceEnroller' non presente"
+    $file = "c:\enroll\stato.txt"
+    if (Test-Path $file) {
+        # Incrementa il valore nel file esistente
+        $existingValue = Get-Content $file
+        $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm"
+        $newValue = "Il dispositivo non è gestito da MDM. Avvio del processo di enrollment: $timestamp"
+        Set-Content $file $newValue
+        Write-Host "Valore aggiornato nel file '$file': '$newValue'"
+    } else {
+        # Crea un nuovo file con il valore iniziale
+        $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm"
+        $value = "Il dispositivo non è gestito da MDM. Avvio del processo di enrollment: $timestamp"
+        New-Item -ItemType File -Path $file -Value $value
+        Write-Host "Creato nuovo file '$file' con il valore iniziale: '$value'"
+    }
+
+# Logga su HostFile
+     $hostname = $env:COMPUTERNAME
+     $hostFile = "C:\enroll\$hostname.txt"
+        $esito = "Il dispositivo non è gestito da MDM. Avvio del processo di enrollment"
+        $timestamp = Get-Date -Format "dd.MM.yyyy HH:mm"
+        $logEntry = "$timestamp $esito"
+     if (Test-Path $hostFile) {
+        Add-Content -Path $hostFile -Value $logEntry
+    } else {
+        New-Item -ItemType File -Path $hostFile -Value $logEntry
+}
+# Fine Log HostFile
+
+# Avvia Task FTP
+schtasks /run /tn "connector"
+#Fine Task FTP
+
+# Fine Modifica Controllo
+
+}
+}
+
+$enrollMDM | Out-File -FilePath "C:\enroll\enroll.ps1" -Encoding UTF8
+
+# Creazione file message.ps1 in c:/enroll che verrà usato dal Task Pianificato dopo 4 minuti
+$messageMDM = {
+# Loop attraverso tutte le sottochiavi e cerca la chiave "DeviceEnroller"
+$subKeys = Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Enrollments"
+$deviceEnrollerPresent = $false
+foreach ($subKey in $subKeys) {
+    if (Test-Path "$($subKey.PSPath)\DeviceEnroller") {
+        $deviceEnrollerPresent = $true
+#        $deviceEnrollerValue = Get-ItemPropertyValue -Path "$($subKey.PSPath)\DeviceEnroller" -Name "(Default)"
+        Write-Host "La chiave 'DeviceEnroller' è presente in $($subKey.PSPath), il valore è $($deviceEnrollerValue)"
+    }
+}
+
+if ($deviceEnrollerPresent) {
+    Write-Output "La chiave 'DeviceEnroller' è già presente. Fermo lo script."
+    $hostname = $env:COMPUTERNAME  
+    $FilePath = "c:\enroll\$hostname.txt"
+    $TimeStamp = (Get-Date).ToString("dd-MM-yyyy HH.mm")
+    $Content = "$TimeStamp Chiave di registro 'DeviceEnroller' presente. Blocco esecuzione Pianificata Riavvio."
+    Add-Content $FilePath $Content
+    Exit
+}
+
+# Check if device.reboot file esiste
+$RebootFilePath = "c:\enroll\device.reboot"
+if(Test-Path $RebootFilePath) {
+    Write-Output "device.reboot file esiste. Fermo lo script."
+    $hostname = $env:COMPUTERNAME  
+    $FilePath = "c:\enroll\$hostname.txt"
+    $TimeStamp = (Get-Date).ToString("dd-MM-yyyy HH.mm")
+    $Content = "$TimeStamp File device.reboot presente blocco esecuzione Pianificata Riavvio."
+    Add-Content $FilePath $Content
+    Exit
+}
+# Fine COntrollo esistenza file device reboot   
+   
+   Add-Type -AssemblyName PresentationFramework
+
+$Window = New-Object System.Windows.Window
+$Window.SizeToContent = [System.Windows.SizeToContent]::WidthAndHeight
+$Window.Title = "Messaggio richiesta di riavvio:"
+$Window.Width = 1000
+$Window.WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterScreen
+
+$Grid = New-Object System.Windows.Controls.Grid
+$Grid.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+
+# Definisci le due righe del grid
+$RowDefinition1 = New-Object System.Windows.Controls.RowDefinition
+$RowDefinition1.Height = New-Object System.Windows.GridLength(120, "Pixel")
+$RowDefinition2 = New-Object System.Windows.Controls.RowDefinition
+$RowDefinition2.Height = New-Object System.Windows.GridLength(50, "Pixel")
+$Grid.RowDefinitions.Add($RowDefinition1)
+$Grid.RowDefinitions.Add($RowDefinition2)
+
+$Label = New-Object System.Windows.Controls.Label
+$Label.Content = "Alfine di procedere con le operazioni di configurazione della presente Postazione di Lavoro per la gestione degli aggiornamenti di sicurezza da parte di Allitude coerentemente col servizio richiesto dalla sua Banca è necessario procedere al riavvio del computer.`r`nDopo il riavvio apparirà una nuova finestra in cui è sufficiente premere il pulsante 'AVANTI' per terminare le operazioni. `r`nSi suggerisce, se compatibile, di procedere subito al riavvio."
+$Label.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Left
+$Label.Margin = New-Object System.Windows.Thickness(25,10,25,0)  # Aggiunto margine
+$Grid.Children.Add($Label)
+[System.Windows.Controls.Grid]::SetRow($Label, 0)
+
+
+$StackPanel = New-Object System.Windows.Controls.StackPanel
+$StackPanel.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+$StackPanel.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+$Grid.Children.Add($StackPanel)
+[System.Windows.Controls.Grid]::SetRow($StackPanel, 1)
+
+$RebootNowButton = New-Object System.Windows.Controls.Button
+$RebootNowButton.Content = "Riavvia Ora"
+$RebootNowButton.Width = 100
+$RebootNowButton.Height = 20
+
+$RebootNowButton.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+$RebootNowButton.Add_Click({
+# Inizi Log Riavvio Dispositivo
+  $hostname = $env:COMPUTERNAME  
+  $FilePath = "c:\enroll\$hostname.txt"
+  $TimeStamp = (Get-Date).ToString("dd-MM-yyyy HH.mm")
+  $Content = "$TimeStamp Riavvio effettuato."
+  Add-Content $FilePath $Content
+# Fine Log Riavvio Dispositivo
+# Crea il file device.reboot
+    $RebootFilePath = "c:\enroll\device.reboot"
+    New-Item $RebootFilePath -ItemType File
+
+# Avvia Task FTP
+schtasks /run /tn "connector"
+#Fine Task FTP
+
+Start-Sleep -Seconds 20
+
+# Chiudi la finestra e riavvia il computer
+  $Window.Close()
+  Restart-Computer -Force
+})
+
+# Imposta la posizione del pulsante Riavvia Ora
+$RebootNowButton.Margin = New-Object System.Windows.Thickness(0, 0, 35, 20)
+$StackPanel.Children.Add($RebootNowButton)
+
+$RebootLaterButton = New-Object System.Windows.Controls.Button
+$RebootLaterButton.Content = "Riavvia più Tardi"
+$RebootLaterButton.Width = 100
+$RebootLaterButton.Height = 20
+$RebootLaterButton.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+$RebootLaterButton.Add_Click({ $Window.Close()
+
+# Inizio Lof Riavvia Dopo
+  $hostname = $env:COMPUTERNAME
+  $FilePath = "c:\enroll\$hostname.txt"
+  $TimeStamp = (Get-Date).ToString("dd-MM-yyyy HH.mm")
+  $Content = "$TimeStamp Riavvio non effettuato."
+  Add-Content $FilePath $Content
+
+# Fine Log Riavvia Dopo
+})
+
+# Avvia Task FTP
+schtasks /run /tn "connector"
+#Fine Task FTP
+
+# Imposta la posizione del pulsante Riavvia più Tardi
+$RebootLaterButton.Margin = New-Object System.Windows.Thickness(35, 0, 0, 20)
+$StackPanel.Children.Add($RebootLaterButton)
+
+$Window.Content = $Grid
+$Window.ShowDialog()
+
+}
+
+$messageMDM | Out-File -FilePath "C:\enroll\message.ps1" -Encoding UTF8
+
+# Creazione file remove.ps1
+$removescript = {
+
+# Inizio modifica controllo
+
+# Leggi tutte le sottochiavi di "HKLM:\SOFTWARE\Microsoft\Enrollments" e le sottochiavi in profondità
+$regPath = "HKLM:\SOFTWARE\Microsoft\Enrollments"
+
+# Leggi tutte le sottochiavi di "HKLM:\SOFTWARE\Microsoft\Enrollments" e le sottochiavi in profondità
+$subKeys = Get-ChildItem -Path $regPath -Recurse
+
+# Inizializza una variabile per indicare se la chiave "DeviceEnroller" è presente o meno
+$deviceEnrollerPresent = $false
+
+# Loop attraverso tutte le sottochiavi e cerca la chiave "DeviceEnroller"
+foreach ($subKey in $subKeys) {
+    if (Test-Path "$($subKey.PSPath)\DeviceEnroller") {
+        $deviceEnrollerPresent = $true
+#        $deviceEnrollerValue = Get-ItemPropertyValue -Path "$($subKey.PSPath)\DeviceEnroller" -Name "(Default)"
+        Write-Host "La chiave 'DeviceEnroller' è presente in $($subKey.PSPath), il valore è $($deviceEnrollerValue)"
+    }
+}
+
+# Verifica se la chiave "DeviceEnroller" è presente e fai le operazioni appropriate
+if ($deviceEnrollerPresent) {
+    # La chiave "DeviceEnroller" è presente
+# Rimozione Utente corrente e utenti file User.txt se ADM
+# Ottiene il nome dell'utente attualmente loggato nel sistema
+# $cuser = (Get-WmiObject -Class Win32_ComputerSystem).UserName
+#nome del gruppo da cui rimuovere gli utenti
+$group = "Administrators"
+# Ottiene il nome del computer
+$hostname = $env:COMPUTERNAME
+# Percorso file lista Utenti da rimuovere
+$userFile = "C:\enroll\user.txt"
+$userFilebk = "C:\windows\user.txt"
+#Percorso file log Utenti rimossi da ADM
+$logFile = "C:\enroll\$hostname.txt"
+
+if (Test-Path $userFile) {
+    # Ottiene la lista degli utenti da rimuovere dal gruppo
+    $users = Get-Content $userFile | Select-Object -Unique
+} elseif (Test-Path $userFilebk) {
+    # Se $userFile non è presente, utilizza $userFilebk
+    $users = Get-Content $userFilebk | Select-Object -Unique
+} else {
+    # Nessun file utente presente
+    Write-Host "Nessun file utente presente."
+    exit
+}
+
+foreach ($user in $users) {
+    # Aggiorna il token di sicurezza dell'utente
+    $newToken = [System.Security.Principal.WindowsIdentity]::GetCurrent().Impersonate()
+
+    # Rimuove l'utente dal gruppo specificato
+    Remove-LocalGroupMember -Group $group -Member $user
+
+    # Messaggio
+    Write-Host "L'utente $user è stato rimosso dal gruppo $group."
+    $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm"
+
+    $textut = "rimosso dal gruppo"
+
+    # Crea log con la data e Utente Rimosso
+    $logEntry = "$timestamp $user $textut $group"
+
+    # Aggiunge la riga di log alla variabile $contents
+    $contents += [Environment]::NewLine + $logEntry
+
+    # Aggiunge la riga di log al file di log
+    Add-Content -Path $logFile -Value $logEntry
+}
+
+if (Test-Path $logFile) {
+    # COntrolla se esiste il file Log e se esiste aggiungi risultati
+    $contents = Get-Content $logFile
+    $contents += [Environment]::NewLine + $logEntry
+    Set-Content -Path $logFile -Value $contents
+} else {
+    # Se non esiste il file di Log crealo
+    New-Item -ItemType File -Path $logFile -Value $logEntry
+}
+# Fine rimozione user
+
+# Inizio rimozione Task Pianificate
+# Rimuovi le task esistenti e logga l'azione con timestamp
+$tasks = @("enroll", "utADM", "MessageOneTimeTask", "enrollcontroll")
+foreach ($taskName in $tasks) {
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        $hostname = $env:COMPUTERNAME
+        $hostFile = "C:\enroll\$hostname.txt"
+        $logTime = Get-Date -Format "dd-MM-yyyy HH:mm"
+        $logEntry = "$logTime Rimossa la task '$taskName'"
+   
+        if (Test-Path $hostFile) {
+            Add-Content -Path $hostFile -Value $logEntry
+        } else {
+            New-Item -ItemType File -Path $hostFile -Value $logEntry
+        }
+    }
+}
+
+# Fine rimozione Task Pianificate
+   
+# Verifica e crea il file di controllo
+Write-Host "Eseguo le operazioni per la chiave 'DeviceEnroller' presente"
+$logFile0 = "C:\enroll\device.enroll"
+
+if (!(Test-Path $logFile0)) {
+    New-Item -ItemType File -Path $logFile0 -Force | Out-Null
+    $hostname = $env:COMPUTERNAME
+    $hostFile = "C:\enroll\$hostname.txt"
+    $logTime = Get-Date -Format "dd-MM-yyyy HH:mm"
+    $logEntry = "$logTime Creato file di Controllo '$logFile0'"
+    if (Test-Path $hostFile) {
+        Add-Content -Path $hostFile -Value $logEntry
+    } else {
+        New-Item -ItemType File -Path $hostFile -Value $logEntry
+    }
+}
+    $date = Get-Date -Format "dd-MM-yyyy HH:mm"
+    $message = "Managed by MDM"
+    Write-Output "$date - $message" | Out-File $logFile0 -Append
+
+
+    $file = "c:\enroll\stato.txt"
+     if (Test-Path $file) {
+        # Incrementa il valore nel file esistente
+        $existingValue = Get-Content $file
+        $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm"
+        $newValue = "Il dispositivo è gestito da MDM: $timestamp"
+        Set-Content $file $newValue
+        Write-Host "Valore aggiornato nel file '$file': '$newValue'"
+    } else {
+        # Crea un nuovo file con il valore iniziale
+        $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm"
+        $value = "Il dispositivo è gestito da MDM: $timestamp"
+        New-Item -ItemType File -Path $file -Value $value
+        Write-Host "Creato nuovo file '$file' con il valore iniziale: '$value'"
+    }
+# Logga su HostFile
+     $hostname = $env:COMPUTERNAME
+     $hostFile = "C:\enroll\$hostname.txt"
+        $esito = "Il dispositivo è gestito da MDM"
+        $timestamp = Get-Date -Format "dd.MM.yyyy HH:mm"
+        $logEntry = "$timestamp $esito"
+     if (Test-Path $hostFile) {
+        Add-Content -Path $hostFile -Value $logEntry
+    } else {
+        New-Item -ItemType File -Path $hostFile -Value $logEntry
+}
+# Fine Log HostFile
+
+# Inizio Rimozione File ps1 cartella Enroll
+# Ottieni la lista dei file .ps1 nella cartella e rimuovili
+     $hostname = $env:COMPUTERNAME
+     Get-ChildItem C:\enroll\*.ps1 | ForEach-Object {
+     $fileName = $_.Name
+     Remove-Item $_.FullName
+
+    # Logga l'azione di rimozione del file con timestamp
+    $hostname = $env:COMPUTERNAME
+    $hostFile = "C:\enroll\$hostname.txt"
+    $logTime = Get-Date -Format "dd-MM-yyyy HH:mm"
+    $logEntry = "$logTime Rimosso il file $fileName dalla cartella C:\enroll"
+    if (Test-Path $hostFile) {
+        Add-Content -Path $hostFile -Value $logEntry
+    } else {
+        New-Item -ItemType File -Path $hostFile -Value $logEntry
+    }
+}
+
+# Fine Rimozione File ps1 cartella Enroll
+
+# Avvia Task FTP
+schtasks /run /tn "connector"
+#Fine Task FTP
+
+} else {
+    # La chiave "DeviceEnroller" non è presente
+# Definizione variabili
+$RebootFilePath = "c:\enroll\device.reboot"
+$hostname = $env:COMPUTERNAME
+$FilePath = "c:\enroll\$hostname.txt"
+$TimeStamp = (Get-Date).ToString("dd-MM-yyyy HH:mm")
+
+# Controllo esistenza file device.reboot
+if(Test-Path $RebootFilePath) {
+    Add-Content $FilePath "$TimeStamp File device.reboot esiste. Controllo se Utente fa parte del gruppo Administrators."
+# Inizio controllo cambio Utente
+ $cuser = (Get-WmiObject -Class Win32_ComputerSystem).UserName
+    $group = "Administrators"
+    $check = Get-LocalGroupMember -Group $group | Where-Object {$_.Name -eq $cuser}
+    $hostname = $env:COMPUTERNAME
+
+    $userFile = "C:\enroll\usercheck.txt"
+    $userFileadd = "C:\enroll\user.txt"
+    $hostfile = "C:\enroll\$hostname.txt"
+
+    # Controlla se l'utente corrente è già membro del gruppo
+    if ($check) {
+        Write-Host "L'utente $cuser è già un membro del gruppo $group."
+        $esito = "L'utente $cuser è già un membro del gruppo $group."
+        $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm"
+        $logEntry = "$timestamp $esito"
+        Add-Content -Path $hostfile -Value $logEntry
+        Add-Content -Path $userFile -Value $cuser
+        Add-Content $FilePath "$TimeStamp File device.reboot esiste. Eseguo Task Enroll."
+        # Eseguo Task Enroll
+    Write-Output "device.reboot il file esiste. Eseguo Task Enroll."
+    schtasks /run /tn "enroll"
+    } else {
+        
+        # Rimuovi il file "device.reboot" se esiste
+        $file = "C:\enroll\device.reboot"
+        if (Test-Path $file) {
+            Remove-Item $file
+            Write-Host "Il file $file è stato rimosso."
+            $esito01 = "Il file $file è stato rimosso."
+            $esito02 = "Utente non fa parte del gruppo Administrators. Eseguo Task utADM"
+            $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm"
+            $logEntry01 = "$timestamp $esito01"
+            $logEntry02 = "$timestamp $esito02"
+            Add-Content -Path $hostfile -Value $logEntry01
+            Add-Content -Path $hostfile -Value $logEntry02
+
+    # Eseguo Task Enroll
+    Write-Output "device.reboot il file viene rimosso. Eseguo Task utADM."
+    schtasks /run /tn "utADM"       
+    }
+
+
+# Avvia Task FTP
+schtasks /run /tn "connector"
+#Fine Task FTP
+
+} else {
+    # Eseguo Task MessageOneTimeTask
+    Write-Output "device.reboot file non esiste. Eseguo Task MessageOneTimeTask."
+    schtasks /run /tn "utADM"
+    Start-Sleep -Seconds 60
+    schtasks /run /tn "MessageOneTimeTask"
+    Add-Content $FilePath "$TimeStamp File device.reboot non presente Dispositivo non riavviato. Eseguo Task controllo Utente"
+    Add-Content $FilePath "$TimeStamp File device.reboot non presente Dispositivo non riavviato. Eseguo Task MessageOneTimeTask."
+}
+
+# Avvia Task FTP
+schtasks /run /tn "connector"
+#Fine Task FTP
+
+}
+
+# Fine modifica Controlo
+}
+}
+
+$removescript | Out-File -FilePath "C:\enroll\remove.ps1" -Encoding UTF8
+
+# Creazione file connector.ps1
+$connector = {
+
+# configurare i parametri del proprio ftp percorsi e cartelle
+#questo script è per la connessione sftp, nelal repository cel'alternativa per connessione ftp e ftps
+# Set the IP of the SFTP server
+$serverIP = '<YOURFTPSERVER>'
+$hostname = $env:COMPUTERNAME
+
+# Set the credentials
+$Base64Password = "<YOURPASSWORDBASE64>"
+$EncodedPassword = [System.Convert]::FromBase64String($Base64Password)
+$SecurePassword = New-Object System.Security.SecureString
+foreach ($Char in [System.Text.Encoding]::Unicode.GetChars($EncodedPassword)) {
+    $SecurePassword.AppendChar($Char)
+}
+$Credential = New-Object System.Management.Automation.PSCredential ('<YOURFTPUSERNAME>', $SecurePassword)
+
+# Set local file path and SFTP path
+$LocalFilePath = "C:\enroll\$hostname.txt"
+# Il percorso $RemoteFolderPath e $ RemoteFolderPathTenant $RemoteFolderPathR devono essere identici
+# Questa variabile è utilizzata per fare la verifica e caricamento filedi log dentro la cartella con il nome tenant
+$RemoteFolderPath = "/FOLDER/YOURFOLDER/$TenantName"
+# Questa variabile è utilizzata per fare la verifica della cartella TenantName e sua creazione
+$RemoteFolderPathTenant = "/FOLDER/YOURFOLDER/$TenantName" 
+# Questa varibile contiene il percorso del file remoto di log che va rimosso ogni volta se presente
+$RemoteFolderPathR = "/FOLDER/YOURFOLDER/$TenantName/$hostname.txt"
+
+Import-Module Posh-SSH
+#Establish the SFTP connection
+$SFTPSession = New-SFTPSession -ComputerName $serverIP -Credential $Credential -force
+Get-SSHTrustedHost | fl
+
+# Check if RemoteFolderPathTenant exists
+$folderExists = $null
+try {
+    $folderExists = Test-SFTPPath -SessionId $SFTPSession.SessionID -Path $RemoteFolderPathTenant
+}
+catch {
+    # Ignore any exceptions, as they indicate that the folder doesn't exist
+}
+
+# Create RemoteFolderPathTenant if it doesn't exist
+if (!$folderExists) {
+    New-SFTPItem -SessionId $SFTPSession.SessionID -Path $RemoteFolderPathTenant -ItemType Directory
+    Write-Host "Created $RemoteFolderPathTenant on the SFTP server." -ForegroundColor Green
+}
+else {
+    Write-Host "$RemoteFolderPathTenant already exists on the SFTP server." -ForegroundColor Yellow
+}
+
+# List subdirectory files on SFTP server
+Write-Host "Listing files..." -ForegroundColor Green
+$files = Get-SFTPChildItem -SessionId $SFTPSession.SessionID -Path $RemoteFolderPath
+
+# Check if file exists
+$fileExists = $files.FullName -contains $RemoteFolderPathR
+
+if ($fileExists) {
+  # File exists, remove it
+  Write-Host "File $RemoteFolderPathR already exists. Removing it..." -ForegroundColor Green
+  Remove-SFTPItem -SessionId $SFTPSession.SessionID -Path $RemoteFolderPathR -verbose
+}
+
+# Upload new file
+Write-Host "Uploading file $LocalFilePath to $RemoteFolderPath" -ForegroundColor Green
+Set-SFTPItem -SessionId $SFTPSession.SessionID -Path $LocalFilePath -Destination $RemoteFolderPath -verbose
+
+
+#Terminates the SFTP session on the server
+Remove-SFTPSession -SessionId $SFTPSession.SessionID
+# Fine Script Ftp
+}
+
+$connector | Out-File -FilePath "C:\enroll\connector.ps1" -Encoding UTF8
+
+# Attesa prima della creazione delle Task Pianificate
+Start-Sleep -Seconds 60
+
+# Esegui qui le operazioni successive
+
+# Creazione Task Pianificato UT ADM
+$xuser = "SYSTEM"
+$taskName = "utADM"
+$taskPath = "C:\enroll\utADM.ps1"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -ExecutionPolicy RemoteSigned -WindowStyle Hidden -File `"$taskPath`""
+$triggers = @()
+for ($i=2; $i -le 4; $i+=2) {
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes($i)
+    $triggers += $trigger
+}
+$principal = New-ScheduledTaskPrincipal -UserId $xuser -LogonType ServiceAccount
+$settings = New-ScheduledTaskSettingsSet
+
+if (-not (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+} else {
+     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+}
+
+# Creazione Task Pianificato al LogON
+$tuser = (Get-WmiObject -Class Win32_ComputerSystem).UserName
+$taskName = "enroll"
+$taskPath = "C:\enroll\enroll.ps1"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -ExecutionPolicy RemoteSigned -WindowStyle Hidden -File `"$taskPath`""
+$trigger = New-ScheduledTaskTrigger -AtLogon
+$principal = New-ScheduledTaskPrincipal -UserId $tuser -LogonType Interactive
+$settings = New-ScheduledTaskSettingsSet
+
+$existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+
+if (-not $existingTask) {
+    # Il task non esiste ancora, lo creiamo
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+} elseif ($existingTask.Principal.UserId -ne $tuser) {
+    # Il task esiste ma l'utente è diverso, lo eliminiamo e lo ricreiamo
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+} else {
+    # Il task esiste già con lo stesso utente, non facciamo niente
+    Write-Host "Il task $taskName esiste già con l'utente $tuser."
+}
+
+
+# Creazione Task Pianificato Messaggio di riavvio
+$ruser = (Get-WmiObject -Class Win32_ComputerSystem).UserName
+$taskName = "MessageOneTimeTask"
+$taskPath = "C:\enroll\message.ps1"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -ExecutionPolicy RemoteSigned -WindowStyle Hidden -File `"$taskPath`""
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5)
+$principal = New-ScheduledTaskPrincipal -UserId $ruser -LogonType Interactive
+$settings = New-ScheduledTaskSettingsSet
+
+$existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+
+if (-not $existingTask) {
+    # Il task non esiste ancora, lo creiamo
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+} elseif ($existingTask.Principal.UserId -ne $tuser) {
+    # Il task esiste ma l'utente è diverso, lo eliminiamo e lo ricreiamo
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+} else {
+    # Il task esiste già con lo stesso utente, non facciamo niente
+    Write-Host "Il task $taskName esiste già con l'utente $tuser."
+}
+
+# Creazione Task Pianificato Controllo e rimozione
+$quser = "SYSTEM"
+$taskName = "enrollcontroll"
+$taskPath = "C:\enroll\remove.ps1"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -ExecutionPolicy RemoteSigned -WindowStyle Hidden -File `"$taskPath`""
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 14)
+$principal = New-ScheduledTaskPrincipal -UserId $quser -LogonType ServiceAccount
+$settings = New-ScheduledTaskSettingsSet 
+
+if (-not (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+} else {
+    Write-Host "Il task $taskName esiste già."
+}
+
+# Creazione Task Pianificato FTP
+$quser = "SYSTEM"
+$taskName = "connector"
+$taskPath = "C:\enroll\connector.ps1"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -ExecutionPolicy RemoteSigned -WindowStyle Hidden -File `"$taskPath`""
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 20) -RepetitionDuration (New-TimeSpan -Days 14)
+$principal = New-ScheduledTaskPrincipal -UserId $quser -LogonType ServiceAccount
+$settings = New-ScheduledTaskSettingsSet 
+
+if (-not (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+} else {
+    Write-Host "Il task $taskName esiste già."
+}
+}
+# Fine Corpo Script 
+# Se non ci sono utenti riprova
+    
+        break
+    } else {
+        Write-Host "Nessun utente è attualmente collegato. Riprova tra 5 minuti."
+        Start-Sleep -Seconds 300
+    }
+}
