@@ -1,12 +1,12 @@
 Required:
-# Installa modulo Posh-SSH e Package NuGet Transferetto
+# Install modulo Posh-SSH e Package NuGet Transferetto
 Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
 
 Install-Module -Name Posh-SSH -Scope AllUsers -Force
 
 Install-Module -Name Transferetto -AllowClobber -Force
 
-# Fine Installazione Modulo 
+# End Install Modulo 
 
 
 This script is designed to perform device enrollment on Intune in a semi-automatic way. 
