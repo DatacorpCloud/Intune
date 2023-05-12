@@ -3,7 +3,9 @@ Required:
 Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
 
 Install-Module -Name Posh-SSH -Scope AllUsers -Force
+
 Install-Module -Name Transferetto -AllowClobber -Force
+
 # Fine Installazione Modulo 
 
 
