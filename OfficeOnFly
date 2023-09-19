@@ -32,7 +32,7 @@
         Special thanks to Attilio del Rio for his invaluable support during the development process.
 
     .EXAMPLE
-        Powershell.exe -ExecutionPolicy Bypass .\OfficeOnFly
+        Powershell.exe -ExecutionPolicy Bypass .\OfficeOnFly.ps1
 #>
 
 # Definisci la lista delle applicazioni Office e i loro eseguibili
