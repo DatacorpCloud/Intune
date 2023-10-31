@@ -36,15 +36,6 @@
         Powershell.exe -ExecutionPolicy Bypass .\OfficeOnFly.ps1
 #>
 
-
-# Controllo iniziale per verificare se Office (365) è installato
-$officeKey = "HKLM:\SOFTWARE\Microsoft\Office\16.0\word"
-
-if (-not (Test-Path $officeKey)) { 
-    Write-Error "Office non sembra essere installato sulla postazione. Terminazione dello script."
-    exit 9999
-}
-
 # Definisci la lista delle applicazioni Office e i loro eseguibili
 $apps = @{
     "Word"      = "WINWORD.EXE"
