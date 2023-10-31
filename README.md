@@ -30,3 +30,26 @@ The operations are carried out autonomously by the script, installing only the a
      
 To use it on Intune, simply construct a folder comprising a Microsoft Office 365 setup, the OfficeOnFly.ps1 file, and a .bat file if desired.
 At this point, just create the intunewin file and upload the app.
+
+IntuneSetDeviceLimit
+This script is designed to manage device enrollment configurations in Microsoft Intune using the Microsoft Graph API. The primary goal is to adjust the limit on the number of devices a single user can register in Intune. The script carries out the following operations:
+
+    Establishes a connection to Microsoft Graph.
+    Retrieves the current device enrollment configuration based on the type 'Limit'.
+    Displays the retrieved configurations for verification.
+    Updates the device registration limit for the selected configuration.
+    Displays the updated configuration to confirm the changes.
+
+Usage Scenarios:
+
+    Using Application Credentials:
+    The script can connect to Microsoft Graph using application-specific details: ClientId, TenantId, and CertificateThumbprint. This method is typically employed for automated tasks or when running scripts from server environments where user interaction is not feasible.
+
+    Using User Credentials (Classic Approach):
+    As an alternative to application credentials, the script can also connect using the classic approach, where the user provides their credentials directly. This method is beneficial when an individual administrator wants to execute the script and has the required permissions to make the changes.
+
+Adjustable Limit:
+
+The device registration limit is set in the script using the limit parameter. While the script currently sets this to 15, it can be adjusted according to specific organizational needs. Simply change the value associated with the limit key in the $params hashtable to your desired number.
+
+Feel free to use this description as a guide or documentation for your script.
