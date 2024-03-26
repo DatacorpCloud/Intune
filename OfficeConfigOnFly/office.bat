@@ -1,0 +1,1 @@
+Powershell.exe -ExecutionPolicy Bypass .\installoffice.ps1
