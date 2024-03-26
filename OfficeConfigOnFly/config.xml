@@ -1,5 +1,5 @@
 <Configuration ID="2385da5c-243e-48e0-8c3e-b36d87b0f8bb">
-  <Add OfficeClientEdition="64" Channel="SemiAnnual" Version="16.0.15601.20738">
+  <Add OfficeClientEdition="64" Channel="SemiAnnual" Version="16.0.16130.20868">
     <Product ID="O365ProPlusRetail">
       <Language ID="it-it" />
     </Product>
