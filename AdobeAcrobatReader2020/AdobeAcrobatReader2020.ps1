@@ -1,4 +1,18 @@
-﻿do {
+<#
+.SYNOPSIS
+Script to automate the deployment of Adobe Acrobat Reader DC.
+
+.DESCRIPTION
+This PowerShell script automates the process of uninstalling previous versions of Adobe Acrobat Reader DC, installing a new version, applying updates, configuring registry settings, and confirming installation completion. It is intended for use with SCCM or Intune.
+
+.AUTHOR
+Alessio Orpellini
+Your Email: alessio.orpellini@gmail.com
+Your Web Address: https://github.com/DatacorpCloud/Intune
+
+#>
+
+ do {
     $adobeOpen = Get-Process -Name "Acrobat", "AcroRd32" -ErrorAction SilentlyContinue
     if ($adobeOpen) {
         Write-Host "Adobe Acrobat Reader DC è ancora in esecuzione. Attendo che sia chiuso per procedere."
