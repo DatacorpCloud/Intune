@@ -64,8 +64,8 @@ $filePath = "C:\enroll\adobe2020.txt"
 $content = "Installazione e configurazione di Adobe Reader 2020 completate."
 
 # Crea la directory se non esiste
-if (-not (Test-Path "C:\enroll")) {
-    New-Item -Path "C:\enroll" -ItemType Directory
+if (-not (Test-Path "C:\log")) {
+    New-Item -Path "C:\log" -ItemType Directory
 }
 
 # Scrivi il contenuto nel file
