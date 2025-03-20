@@ -23,7 +23,7 @@ in base alle esigenze della tua organizzazione prima di eseguire lo script.
 function Write-Log {
     param(
         [string]$Message,
-        [string]$Path = "C:\enroll\deploy-log.txt",
+        [string]$Path = "C:\log\deploy-log.txt",
         [string]$Severity = "INFO"
     )
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -112,11 +112,11 @@ foreach ($UserDir in $UserDirs) {
     }
 }
 # Creazione del file di rilevamento dell'installazione per Intune
-$DetectionFilePath = "C:\enroll\firefox115.8.0esr.txt"
+$DetectionFilePath = "C:\log\firefox115.8.0esr.txt"
 
 # Controlla se la cartella esiste, altrimenti la crea
-if (-not (Test-Path -Path "C:\enroll")) {
-    New-Item -Path "C:\enroll" -ItemType Directory | Out-Null
+if (-not (Test-Path -Path "C:\log")) {
+    New-Item -Path "C:\log" -ItemType Directory | Out-Null
 }
 
 # Crea il file di rilevamento
