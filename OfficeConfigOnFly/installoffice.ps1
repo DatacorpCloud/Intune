@@ -151,7 +151,7 @@ Start-Process .\OfficeSetup.exe -ArgumentList "/configure configok.xml" -Wait
 # Verifica se il processo è terminato con successo
 if ($process.ExitCode -eq 0) {
     # Scrivi un log in caso di successo
-    $logDir = "C:\enroll"
+    $logDir = "C:\log"
     $logFile = Join-Path $logDir "Office-16.0.16130.20868.txt"
     $logMessage = "Configurazione di Office completata con successo."
 
